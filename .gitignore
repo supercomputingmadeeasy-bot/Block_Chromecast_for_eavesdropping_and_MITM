@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Logs
+logs/
+*.log
+
+# Runtime state
+/tmp/chromecast_blocker_state.json
+
+# OS
+.DS_Store
+Thumbs.db

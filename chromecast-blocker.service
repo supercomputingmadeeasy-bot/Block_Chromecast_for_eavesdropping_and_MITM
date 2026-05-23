@@ -1,0 +1,34 @@
+[Unit]
+Description=Chromecast Security Blocker
+Documentation=file:///home/jorgen-larsen/block_chromecast/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/jorgen-larsen/block_chromecast
+Environment="PYTHONUNBUFFERED=1"
+
+# Discover and protect on startup
+ExecStart=/usr/bin/python3 /home/jorgen-larsen/block_chromecast/advanced_blocker.py \
+  --config /home/jorgen-larsen/block_chromecast/config.yaml protect-all
+
+# Restart on failure
+Restart=on-failure
+RestartSec=30
+
+# Security
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/jorgen-larsen/block_chromecast/logs /var/log
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=chromecast-blocker
+
+[Install]
+WantedBy=multi-user.target

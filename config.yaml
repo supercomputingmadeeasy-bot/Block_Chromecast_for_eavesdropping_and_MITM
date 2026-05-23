@@ -1,0 +1,81 @@
+# Chromecast Security Blocker Configuration
+
+# Chromecast device(s) to protect
+chromecast_devices:
+  - ip: 10.42.0.88
+    name: "Living Room Chromecast"
+    enabled: true
+  
+# Network interface to monitor (wlan0 = Pi Wi-Fi hotspot where Chromecast connects)
+network_interface: wlan0
+
+# Global blocking settings
+blocking:
+  # Block external access completely
+  block_external: true
+  
+  # Block cloud connectivity and eavesdropping
+  block_eavesdropping: true
+  
+  # Prevent DDoS amplification attacks
+  block_ddos_amplification: true
+  
+  # Protect against man-in-the-middle attacks
+  block_mitm: true
+  
+  # Completely isolate Chromecast to local network only
+  isolate_local_only: true
+
+# Google domains to block (for eavesdropping prevention)
+blocked_domains:
+  - google.com
+  - googleapis.com
+  - googleusercontent.com
+  - gstatic.com
+  - firebase.google.com
+  - crashlytics.com
+  - analytics.google.com
+  - advertising.google.com
+  - doubleclick.net
+  - googlesyndication.com
+  - googleadservices.com
+
+# Ports commonly used by Chromecast
+chromecast_ports:
+  - 5353    # mDNS discovery (can be exploited)
+  - 8008    # Chromecast communication
+  - 8009    # Chromecast HDMI CEC
+
+# Ports to rate-limit (prevent amplification attacks)
+rate_limited_ports:
+  - 53      # DNS
+  - 123     # NTP
+  - 1900    # SSDP
+  - 5353    # mDNS
+
+# Allowed local network ranges
+local_networks:
+  - 192.168.0.0/16
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+
+# Monitoring settings
+monitoring:
+  # Enable continuous monitoring
+  enabled: true
+  
+  # Check interval in seconds
+  interval: 60
+  
+  # Log suspicious activity
+  log_suspicious: true
+  
+  # Alert on unusual traffic patterns
+  alert_on_anomaly: true
+
+# Logging
+logging:
+  level: INFO
+  file: chromecast_blocker.log
+  max_size_mb: 10
+  backup_count: 5

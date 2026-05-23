@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Chromecast Security Blocker</title>
+
+  <!-- Bootstrap 5 dark -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <!-- Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet"/>
+  <!-- xterm.js -->
+  <link href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" rel="stylesheet"/>
+
+  <style>
+    :root {
+      --accent: #0d6efd;
+      --danger: #dc3545;
+      --success: #198754;
+      --warning: #ffc107;
+      --sidebar-w: 300px;
+    }
+
+    body { overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+    #topbar { flex-shrink: 0; background: #0d1117; border-bottom: 1px solid #30363d; padding: 0 1rem; height: 52px; display: flex; align-items: center; gap: .75rem; }
+    #topbar .brand { font-weight: 700; font-size: 1.05rem; color: #e6edf3; letter-spacing: .03em; }
+    #topbar .dot { width: 10px; height: 10px; border-radius: 50%; background: #238636; box-shadow: 0 0 6px #238636; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    #main { flex: 1; display: flex; overflow: hidden; }
+
+    /* ── Sidebar ──────────────────────────────────────────────────── */
+    #sidebar {
+      width: var(--sidebar-w); min-width: var(--sidebar-w);
+      background: #0d1117; border-right: 1px solid #30363d;
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    #sidebar .sec { padding: .75rem 1rem; border-bottom: 1px solid #21262d; }
+    #sidebar .sec-title { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: #8b949e; margin-bottom: .5rem; }
+    .device-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: .6rem .8rem; margin-bottom: .5rem; }
+    .device-card .name { font-weight: 600; font-size: .85rem; }
+    .device-card .ip   { font-size: .75rem; color: #8b949e; }
+    .badge-prot  { font-size: .65rem; padding: .2em .45em; }
+
+    .btn-action {
+      width: 100%; font-size: .8rem; text-align: left;
+      background: #161b22; border: 1px solid #30363d; color: #c9d1d9;
+      border-radius: 6px; padding: .45rem .75rem; margin-bottom: .35rem;
+      display: flex; align-items: center; gap: .5rem; cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    .btn-action:hover  { background: #1f2937; border-color: #4d5566; }
+    .btn-action.danger { border-color: #dc3545; color: #ff6b6b; }
+    .btn-action.danger:hover { background: #2d1a1e; }
+    .btn-action .bi    { font-size: 1rem; }
+
+    /* ── Content area ─────────────────────────────────────────────── */
+    #content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #0d1117; }
+
+    /* Tab bar */
+    #tab-bar { background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; padding: 0 .5rem; overflow-x: auto; flex-shrink: 0; height: 38px; gap: 2px; }
+    .tab-btn {
+      background: none; border: none; color: #8b949e; padding: 0 .85rem;
+      height: 38px; font-size: .82rem; border-bottom: 2px solid transparent;
+      cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: .4rem;
+      transition: color .15s;
+    }
+    .tab-btn:hover      { color: #c9d1d9; }
+    .tab-btn.active     { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .tab-close { font-size: .75rem; margin-left: .25rem; opacity: .5; }
+    .tab-close:hover    { opacity: 1; }
+    #new-tab-btn { margin-left: auto; background: none; border: none; color: #8b949e; font-size: 1.1rem; cursor: pointer; padding: 0 .5rem; }
+    #new-tab-btn:hover  { color: #c9d1d9; }
+
+    /* Panes */
+    .pane { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+    .pane.active { display: flex; }
+
+    /* Terminal pane */
+    #term-container { flex: 1; overflow: hidden; padding: 4px; background: #000; position: relative; }
+    #term-container .xterm { height: 100%; }
+    #term-input-bar { background: #161b22; border-top: 1px solid #30363d; padding: .4rem .75rem; display: flex; gap: .5rem; flex-shrink: 0; }
+    #term-cmd { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; padding: .3rem .6rem; font-family: monospace; font-size: .85rem; }
+    #term-cmd:focus { outline: none; border-color: #58a6ff; }
+
+    /* Status pane */
+    #status-pane { padding: 1rem; overflow-y: auto; }
+    .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 1rem; }
+    .stat-card .stat-val { font-size: 1.8rem; font-weight: 700; }
+    .prot-row { display: flex; align-items: center; justify-content: space-between; padding: .35rem 0; border-bottom: 1px solid #21262d; font-size: .85rem; }
+    .prot-row:last-child { border-bottom: none; }
+    .prot-ok   { color: #3fb950; }
+    .prot-fail { color: #f85149; }
+    .prot-unk  { color: #8b949e; }
+
+    /* Config pane */
+    #config-pane { padding: 1rem; display: flex; flex-direction: column; overflow: hidden; }
+    #config-editor { flex: 1; font-family: 'Fira Code', 'Courier New', monospace; font-size: .82rem; background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: .75rem; resize: none; outline: none; overflow-y: auto; }
+    #config-editor:focus { border-color: #58a6ff; }
+
+    /* Logs pane */
+    #logs-pane { padding: 1rem; display: flex; flex-direction: column; overflow: hidden; }
+    #log-content { flex: 1; overflow-y: auto; font-family: monospace; font-size: .78rem; background: #000; border: 1px solid #30363d; border-radius: 6px; padding: .75rem; color: #c9d1d9; white-space: pre-wrap; word-break: break-all; }
+    .log-error  { color: #f85149; }
+    .log-warn   { color: #e3b341; }
+    .log-info   { color: #79c0ff; }
+
+    /* iptables pane */
+    #ipt-pane { padding: 1rem; display: flex; flex-direction: column; overflow: hidden; }
+    #ipt-content { flex: 1; overflow-y: auto; font-family: monospace; font-size: .78rem; background: #000; border: 1px solid #30363d; border-radius: 6px; padding: .75rem; color: #c9d1d9; white-space: pre-wrap; }
+
+    /* Running tasks badge */
+    #tasks-badge { background: #1f6feb; color: #fff; border-radius: 10px; font-size: .7rem; padding: .1rem .45rem; margin-left: .25rem; }
+
+    /* Toast area */
+    #toast-area { position: fixed; bottom: 1rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: .5rem; }
+    .toast-msg { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: .5rem 1rem; font-size: .82rem; min-width: 200px; animation: fadein .2s; }
+    .toast-msg.success { border-color: #238636; color: #3fb950; }
+    .toast-msg.error   { border-color: #da3633; color: #f85149; }
+    .toast-msg.info    { border-color: #1f6feb; color: #79c0ff; }
+    @keyframes fadein { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+
+    /* Responsive */
+    @media (max-width: 700px) {
+      #sidebar { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ── Top bar ─────────────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <div class="dot" id="conn-dot" title="WebSocket status"></div>
+  <div class="brand"><i class="bi bi-shield-lock-fill me-1" style="color:#58a6ff"></i>Chromecast Security Blocker</div>
+  <span class="ms-auto text-secondary" style="font-size:.78rem" id="srv-time">—</span>
+  <span class="badge bg-secondary" id="rule-count-badge">0 rules</span>
+  <button class="btn btn-sm btn-outline-secondary ms-2" onclick="refreshStatus()" title="Refresh status">
+    <i class="bi bi-arrow-clockwise"></i>
+  </button>
+</div>
+
+<!-- ── Main layout ─────────────────────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <div id="sidebar">
+
+    <!-- Devices -->
+    <div class="sec">
+      <div class="sec-title"><i class="bi bi-hdd-network me-1"></i>Devices</div>
+      <div id="device-list">
+        <div class="text-secondary" style="font-size:.8rem">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="sec">
+      <div class="sec-title"><i class="bi bi-lightning-charge me-1"></i>Quick Actions</div>
+      <button class="btn-action" onclick="runAction('protect_all')">
+        <i class="bi bi-shield-fill-check"></i> Protect All Devices
+      </button>
+      <button class="btn-action" onclick="runAction('discover')">
+        <i class="bi bi-search"></i> Discover Devices
+      </button>
+      <button class="btn-action" onclick="runAction('monitor')">
+        <i class="bi bi-activity"></i> Start Monitor
+      </button>
+      <button class="btn-action" onclick="runAction('summary')">
+        <i class="bi bi-list-check"></i> Show Summary
+      </button>
+      <button class="btn-action" onclick="runAction('status_monitor')">
+        <i class="bi bi-display"></i> Status Dashboard
+      </button>
+    </div>
+
+    <!-- Per-device actions -->
+    <div class="sec">
+      <div class="sec-title"><i class="bi bi-cpu me-1"></i>Per-Device Actions</div>
+      <div id="ip-selector-wrap" class="mb-2">
+        <select id="device-ip-select" class="form-select form-select-sm bg-dark text-light border-secondary">
+          <option value="">— select device —</option>
+        </select>
+      </div>
+      <button class="btn-action" onclick="runDeviceAction('full_protect')">
+        <i class="bi bi-shield-fill-exclamation"></i> Full Protect
+      </button>
+      <button class="btn-action" onclick="runDeviceAction('block')">
+        <i class="bi bi-ban"></i> Block External
+      </button>
+      <button class="btn-action" onclick="runDeviceAction('status')">
+        <i class="bi bi-info-circle"></i> Device Status
+      </button>
+      <button class="btn-action" onclick="runDeviceAction('monitor_ip')">
+        <i class="bi bi-eye"></i> Monitor Device
+      </button>
+    </div>
+
+    <!-- Danger zone -->
+    <div class="sec">
+      <div class="sec-title"><i class="bi bi-exclamation-triangle me-1" style="color:#f85149"></i>Danger Zone</div>
+      <button class="btn-action danger" onclick="confirmAction('flush','Flush ALL iptables rules?')">
+        <i class="bi bi-trash"></i> Flush iptables Rules
+      </button>
+      <button class="btn-action danger" onclick="confirmAction('export_rules','Export rules to logs/rules_backup.txt?')">
+        <i class="bi bi-download"></i> Export Rules Backup
+      </button>
+    </div>
+
+    <!-- Running tasks -->
+    <div class="sec">
+      <div class="sec-title">
+        <i class="bi bi-terminal me-1"></i>Running Tasks
+        <span id="tasks-badge">0</span>
+      </div>
+      <div id="task-list" style="font-size:.78rem"></div>
+    </div>
+  </div>
+
+  <!-- ── Content ──────────────────────────────────────────────────────────── -->
+  <div id="content">
+    <!-- Tab bar -->
+    <div id="tab-bar">
+      <button class="tab-btn active" data-pane="terminal-pane" onclick="switchTab(this)">
+        <i class="bi bi-terminal"></i> Terminal
+      </button>
+      <button class="tab-btn" data-pane="status-pane" onclick="switchTab(this)">
+        <i class="bi bi-shield-check"></i> Status
+      </button>
+      <button class="tab-btn" data-pane="config-pane" onclick="switchTab(this)">
+        <i class="bi bi-gear"></i> Config
+      </button>
+      <button class="tab-btn" data-pane="logs-pane" onclick="switchTab(this)">
+        <i class="bi bi-journal-text"></i> Logs
+      </button>
+      <button class="tab-btn" data-pane="ipt-pane" onclick="switchTab(this)">
+        <i class="bi bi-fire"></i> iptables
+      </button>
+      <button id="new-tab-btn" title="New terminal tab" onclick="addTermTab()">+</button>
+    </div>
+
+    <!-- Terminal pane -->
+    <div class="pane active" id="terminal-pane">
+      <div id="term-container"></div>
+      <div id="term-input-bar">
+        <span style="color:#8b949e;font-size:.82rem;align-self:center">$</span>
+        <input id="term-cmd" type="text" placeholder="Enter command or use sidebar actions…" autocomplete="off"/>
+        <button class="btn btn-sm btn-primary" onclick="sendTermCmd()">
+          <i class="bi bi-play-fill"></i> Run
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="clearTerm()">
+          <i class="bi bi-x-lg"></i> Clear
+        </button>
+      </div>
+    </div>
+
+    <!-- Status pane -->
+    <div class="pane" id="status-pane">
+      <div id="status-content" style="overflow-y:auto;flex:1;padding:1rem">
+        <div class="row g-3 mb-3" id="stat-cards"></div>
+        <div id="dev-status-cards"></div>
+      </div>
+    </div>
+
+    <!-- Config pane -->
+    <div class="pane" id="config-pane">
+      <div style="padding:.75rem;border-bottom:1px solid #30363d;display:flex;gap:.5rem;flex-shrink:0">
+        <span class="me-auto text-secondary" style="align-self:center;font-size:.85rem">config.yaml</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadConfig()">
+          <i class="bi bi-arrow-clockwise"></i> Reload
+        </button>
+        <button class="btn btn-sm btn-success" onclick="saveConfig()">
+          <i class="bi bi-floppy"></i> Save
+        </button>
+      </div>
+      <div style="flex:1;overflow:hidden;padding:.75rem;display:flex">
+        <textarea id="config-editor" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <!-- Logs pane -->
+    <div class="pane" id="logs-pane">
+      <div style="padding:.75rem;border-bottom:1px solid #30363d;display:flex;gap:.5rem;flex-shrink:0">
+        <span class="me-auto text-secondary" style="align-self:center;font-size:.85rem">Application logs</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadLogs()">
+          <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="toggleAutoLog()">
+          <i class="bi bi-arrow-repeat"></i> <span id="auto-log-lbl">Auto OFF</span>
+        </button>
+      </div>
+      <div id="log-content"></div>
+    </div>
+
+    <!-- iptables pane -->
+    <div class="pane" id="ipt-pane">
+      <div style="padding:.75rem;border-bottom:1px solid #30363d;display:flex;gap:.5rem;flex-shrink:0">
+        <span class="me-auto text-secondary" style="align-self:center;font-size:.85rem">Active iptables rules</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadIptables()">
+          <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+      </div>
+      <pre id="ipt-content"></pre>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<!-- Toast area -->
+<div id="toast-area"></div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Socket.IO -->
+<script src="https://cdn.jsdelivr.net/npm/socket.io@4.7.5/client-dist/socket.io.min.js"></script>
+<!-- xterm.js + FitAddon -->
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   State
+═══════════════════════════════════════════════════════════════════════════ */
+let socket = null;
+let terminals  = {};   // tabId → {term, fitAddon, element}
+let activeTabId = 'main';
+let termTabCounter = 1;
+let taskTermMap    = {};  // task_id → tabId
+let autoLogTimer   = null;
+let cmdHistory = [];
+let histIdx = -1;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Init
+═══════════════════════════════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  initTerminal('main');
+  initSocket();
+  refreshStatus();
+  loadConfig();
+  loadLogs();
+
+  document.getElementById('term-cmd').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { sendTermCmd(); return; }
+    if (e.key === 'ArrowUp')   { histNav(-1); e.preventDefault(); }
+    if (e.key === 'ArrowDown') { histNav(+1); e.preventDefault(); }
+  });
+
+  setInterval(refreshStatus, 15000);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Terminal
+═══════════════════════════════════════════════════════════════════════════ */
+function initTerminal(tabId) {
+  const container = document.getElementById('term-container');
+
+  // Create a wrapper div for this terminal instance
+  const wrapper = document.createElement('div');
+  wrapper.id = `xterm-${tabId}`;
+  wrapper.style.cssText = 'position:absolute;top:4px;left:4px;right:4px;bottom:4px;display:none';
+  container.appendChild(wrapper);
+
+  const term = new Terminal({
+    theme: {
+      background: '#0d0d0d',
+      foreground: '#c9d1d9',
+      cursor: '#58a6ff',
+      selectionBackground: '#264f78',
+      black: '#484f58', red: '#ff7b72', green: '#3fb950',
+      yellow: '#d29922', blue: '#58a6ff', magenta: '#bc8cff',
+      cyan: '#39c5cf', white: '#b1bac4',
+      brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364',
+      brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
+      brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+    },
+    fontFamily: "'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+    fontSize: 13,
+    lineHeight: 1.3,
+    cursorBlink: true,
+    scrollback: 5000,
+    convertEol: true,
+  });
+
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(wrapper);
+  fitAddon.fit();
+
+  terminals[tabId] = { term, fitAddon, wrapper };
+
+  if (tabId === activeTabId) {
+    wrapper.style.display = 'block';
+    fitAddon.fit();
+  }
+
+  term.writeln('\x1b[38;5;69m╔══════════════════════════════════════════════════╗\x1b[0m');
+  term.writeln('\x1b[38;5;69m║  Chromecast Security Blocker — Live Terminal     ║\x1b[0m');
+  term.writeln('\x1b[38;5;69m╚══════════════════════════════════════════════════╝\x1b[0m');
+  term.writeln('\x1b[90mUse the sidebar controls or type commands below.\x1b[0m');
+  term.writeln('');
+
+  new ResizeObserver(() => { try { fitAddon.fit(); } catch(e){} })
+    .observe(container);
+}
+
+function showTerminal(tabId) {
+  Object.entries(terminals).forEach(([id, {wrapper}]) => {
+    wrapper.style.display = id === tabId ? 'block' : 'none';
+  });
+  activeTabId = tabId;
+  try { terminals[tabId].fitAddon.fit(); } catch(e) {}
+}
+
+function writeToTerm(tabId, text, color) {
+  const t = terminals[tabId] || terminals['main'];
+  if (!t) return;
+  if (color) {
+    t.term.write(`\x1b[${color}m${text}\x1b[0m`);
+  } else {
+    t.term.write(text);
+  }
+}
+
+function clearTerm() {
+  const t = terminals[activeTabId];
+  if (t) t.term.clear();
+}
+
+function addTermTab() {
+  const tabId = `tab-${++termTabCounter}`;
+  const tabBar = document.getElementById('tab-bar');
+  const newTabBtn = document.getElementById('new-tab-btn');
+
+  const btn = document.createElement('button');
+  btn.className = 'tab-btn';
+  btn.dataset.pane = 'terminal-pane';
+  btn.dataset.tabId = tabId;
+  btn.innerHTML = `<i class="bi bi-terminal"></i> Term ${termTabCounter} <span class="tab-close" onclick="closeTermTab('${tabId}',event)">×</span>`;
+  btn.onclick = () => switchTab(btn);
+  tabBar.insertBefore(btn, newTabBtn);
+
+  initTerminal(tabId);
+  switchTab(btn);
+}
+
+function closeTermTab(tabId, event) {
+  event.stopPropagation();
+  const btn = document.querySelector(`[data-tab-id="${tabId}"]`);
+  if (btn) btn.remove();
+  const {wrapper} = terminals[tabId] || {};
+  if (wrapper) wrapper.remove();
+  delete terminals[tabId];
+  if (activeTabId === tabId) {
+    showTerminal('main');
+    document.querySelector('[data-pane="terminal-pane"]:not([data-tab-id])').classList.add('active');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WebSocket
+═══════════════════════════════════════════════════════════════════════════ */
+function initSocket() {
+  socket = io({ transports: ['websocket', 'polling'] });
+
+  socket.on('connect', () => {
+    document.getElementById('conn-dot').style.background = '#238636';
+    document.getElementById('conn-dot').style.boxShadow = '0 0 6px #238636';
+    toast('Connected to server', 'info');
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('conn-dot').style.background = '#da3633';
+    document.getElementById('conn-dot').style.boxShadow = '0 0 6px #da3633';
+    toast('Disconnected', 'error');
+  });
+
+  socket.on('task_started', (data) => {
+    const tabId = taskTermMap[data.task_id] || activeTabId;
+    writeToTerm(tabId,
+      `\r\n\x1b[38;5;27m▶ [${data.ts}] Task started: ${escapeAnsi(data.name)}\x1b[0m\r\n` +
+      `\x1b[90m  CMD: ${escapeAnsi(data.cmd)}\x1b[0m\r\n\r\n`
+    );
+    refreshStatus();
+  });
+
+  socket.on('terminal_output', (data) => {
+    const tabId = taskTermMap[data.task_id] || activeTabId;
+    const text = data.line.replace(/\n$/, '');
+    const color = data.fd === 'stderr' ? '33' : null;  // yellow for stderr
+    writeToTerm(tabId, (color ? `\x1b[${color}m` : '') + text + (color ? '\x1b[0m' : '') + '\r\n');
+  });
+
+  socket.on('task_done', (data) => {
+    const tabId = taskTermMap[data.task_id] || activeTabId;
+    const ok = data.exit_code === 0;
+    writeToTerm(tabId,
+      `\r\n\x1b[${ok ? '32' : '31'}m■ [${data.ts}] Task finished (exit: ${data.exit_code})\x1b[0m\r\n\r\n`
+    );
+    delete taskTermMap[data.task_id];
+    refreshStatus();
+    if (!ok) toast(`Task failed (exit ${data.exit_code})`, 'error');
+  });
+}
+
+function escapeAnsi(s) {
+  return String(s).replace(/[\x1b\x9b][[()#;?]*([0-9]{1,4}(;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]/g, '');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tab switching
+═══════════════════════════════════════════════════════════════════════════ */
+function switchTab(btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const paneId = btn.dataset.pane;
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  document.getElementById(paneId).classList.add('active');
+
+  if (paneId === 'terminal-pane') {
+    const tabId = btn.dataset.tabId || 'main';
+    showTerminal(tabId);
+  }
+  if (paneId === 'status-pane') refreshStatus();
+  if (paneId === 'logs-pane')   loadLogs();
+  if (paneId === 'ipt-pane')    loadIptables();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Actions
+═══════════════════════════════════════════════════════════════════════════ */
+async function runAction(action, ip, tabId) {
+  const body = { action };
+  if (ip) body.ip = ip;
+
+  // Each action gets its own terminal tab for clean parallel output
+  if (!tabId) {
+    if (Object.keys(terminals).length < 8) {
+      addTermTab();
+      tabId = `tab-${termTabCounter}`;
+    } else {
+      tabId = activeTabId;
+    }
+  }
+
+  try {
+    const resp = await fetch('/api/command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      toast(data.error || 'Error', 'error');
+      return;
+    }
+    taskTermMap[data.task_id] = tabId;
+    toast(`Started: ${action}`, 'success');
+  } catch (e) {
+    toast(`Network error: ${e}`, 'error');
+  }
+}
+
+function runDeviceAction(action) {
+  const sel = document.getElementById('device-ip-select');
+  const ip  = sel.value;
+  if (!ip) { toast('Select a device first', 'error'); return; }
+  runAction(action, ip);
+}
+
+function confirmAction(action, msg) {
+  if (confirm(msg)) runAction(action);
+}
+
+async function sendTermCmd() {
+  const input = document.getElementById('term-cmd');
+  const cmd   = input.value.trim();
+  if (!cmd) return;
+
+  cmdHistory.unshift(cmd);
+  if (cmdHistory.length > 100) cmdHistory.pop();
+  histIdx = -1;
+  input.value = '';
+
+  // Echo to terminal
+  writeToTerm(activeTabId, `\x1b[90m$ ${escapeAnsi(cmd)}\x1b[0m\r\n`);
+
+  // Check for UI shortcuts
+  const shortcuts = {
+    'protect-all':   () => runAction('protect_all', null, activeTabId),
+    'discover':      () => runAction('discover',    null, activeTabId),
+    'monitor':       () => runAction('monitor',     null, activeTabId),
+    'flush':         () => runAction('flush',       null, activeTabId),
+    'summary':       () => runAction('summary',     null, activeTabId),
+    'clear':         clearTerm,
+    'help':          showHelp,
+  };
+  if (shortcuts[cmd]) { shortcuts[cmd](); return; }
+
+  // Run as raw command
+  try {
+    const resp = await fetch('/api/command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'raw', cmd }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      writeToTerm(activeTabId, `\x1b[31mError: ${escapeAnsi(data.error)}\x1b[0m\r\n`);
+      return;
+    }
+    taskTermMap[data.task_id] = activeTabId;
+  } catch (e) {
+    writeToTerm(activeTabId, `\x1b[31mNetwork error: ${e}\x1b[0m\r\n`);
+  }
+}
+
+function histNav(dir) {
+  const input = document.getElementById('term-cmd');
+  histIdx = Math.max(-1, Math.min(cmdHistory.length - 1, histIdx + dir));
+  input.value = histIdx >= 0 ? cmdHistory[histIdx] : '';
+}
+
+function showHelp() {
+  const t = terminals[activeTabId];
+  if (!t) return;
+  t.term.writeln('\x1b[38;5;69m╔ Available shortcuts ═════════════════════════════╗\x1b[0m');
+  [
+    'protect-all   — Apply all protections to configured devices',
+    'discover      — Scan network for Chromecast devices',
+    'monitor       — Start continuous monitoring',
+    'flush         — Flush all iptables rules  ⚠',
+    'summary       — Show protection summary',
+    'clear         — Clear this terminal',
+    'help          — Show this help',
+    '',
+    'Or type any shell command to run it directly.',
+  ].forEach(line => t.term.writeln(`  ${line}`));
+  t.term.writeln('\x1b[38;5;69m╚═══════════════════════════════════════════════════╝\x1b[0m');
+  t.term.writeln('');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Status
+═══════════════════════════════════════════════════════════════════════════ */
+async function refreshStatus() {
+  try {
+    const resp = await fetch('/api/status');
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    document.getElementById('srv-time').textContent = new Date(data.server_time).toLocaleTimeString();
+    document.getElementById('rule-count-badge').textContent = `${data.rule_count} rules`;
+
+    // Sidebar task list
+    const tasksEl = document.getElementById('task-list');
+    const badge   = document.getElementById('tasks-badge');
+    badge.textContent = data.active_tasks.length;
+    if (data.active_tasks.length === 0) {
+      tasksEl.innerHTML = '<div class="text-secondary">No running tasks</div>';
+    } else {
+      tasksEl.innerHTML = data.active_tasks.map(t => `
+        <div class="d-flex align-items-center justify-content-between mb-1">
+          <span class="text-truncate me-1" title="${t.cmd}">${t.name}</span>
+          <button class="btn btn-xs btn-outline-danger" style="font-size:.65rem;padding:.1rem .3rem"
+                  onclick="killTask('${t.task_id}')">✕</button>
+        </div>`).join('');
+    }
+
+    // Device list in sidebar
+    const devListEl  = document.getElementById('device-list');
+    const devSelect  = document.getElementById('device-ip-select');
+    devListEl.innerHTML = '';
+    const currentVal = devSelect.value;
+    devSelect.innerHTML = '<option value="">— select device —</option>';
+
+    data.devices.forEach(dev => {
+      const prot = dev.protected;
+      devListEl.innerHTML += `
+        <div class="device-card">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="name">${dev.name}</div>
+              <div class="ip">${dev.ip}</div>
+            </div>
+            <span class="badge badge-prot ${prot ? 'bg-success' : 'bg-danger'}">
+              ${prot ? 'Protected' : 'Unprotected'}
+            </span>
+          </div>
+          ${!dev.enabled ? '<div class="text-secondary mt-1" style="font-size:.7rem">⏸ Disabled in config</div>' : ''}
+        </div>`;
+      const opt = document.createElement('option');
+      opt.value = dev.ip;
+      opt.textContent = `${dev.name} (${dev.ip})`;
+      devSelect.appendChild(opt);
+    });
+    if (currentVal) devSelect.value = currentVal;
+
+    // Status pane cards
+    renderStatusPane(data);
+
+  } catch (e) {
+    console.error('refreshStatus error', e);
+  }
+}
+
+function renderStatusPane(data) {
+  const cardsEl = document.getElementById('stat-cards');
+  cardsEl.innerHTML = `
+    <div class="col-6 col-md-3">
+      <div class="stat-card text-center">
+        <div class="stat-val text-primary">${data.rule_count >= 0 ? data.rule_count : '—'}</div>
+        <div class="text-secondary" style="font-size:.8rem">iptables rules</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-card text-center">
+        <div class="stat-val text-success">${data.devices.filter(d => d.protected).length}</div>
+        <div class="text-secondary" style="font-size:.8rem">protected devices</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-card text-center">
+        <div class="stat-val text-warning">${data.active_tasks.length}</div>
+        <div class="text-secondary" style="font-size:.8rem">running tasks</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="stat-card text-center">
+        <div class="stat-val text-info">${data.devices.length}</div>
+        <div class="text-secondary" style="font-size:.8rem">total devices</div>
+      </div>
+    </div>
+  `;
+
+  const devEl = document.getElementById('dev-status-cards');
+  if (data.devices.length === 0) {
+    devEl.innerHTML = '<div class="text-secondary">No devices configured. Edit config.yaml to add devices.</div>';
+    return;
+  }
+  devEl.innerHTML = data.devices.map(dev => `
+    <div class="stat-card mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <strong>${dev.name}</strong>
+        <span class="badge ${dev.protected ? 'bg-success' : 'bg-danger'}">${dev.protected ? '✓ Protected' : '✗ Not Protected'}</span>
+      </div>
+      <div class="prot-row"><span>IP Address</span><code style="font-size:.8rem">${dev.ip}</code></div>
+      <div class="prot-row"><span>Config Status</span>
+        <span class="${dev.enabled ? 'prot-ok' : 'prot-fail'}">${dev.enabled ? '✓ Enabled' : '⏸ Disabled'}</span>
+      </div>
+      <div class="prot-row"><span>iptables rules present</span>
+        <span class="${dev.protected ? 'prot-ok' : 'prot-fail'}">${dev.protected ? '✓ YES' : '✗ NO'}</span>
+      </div>
+      <div class="d-flex gap-2 mt-2 flex-wrap">
+        <button class="btn btn-sm btn-success" onclick="runAction('full_protect','${dev.ip}')">
+          <i class="bi bi-shield-fill-check"></i> Protect Now
+        </button>
+        <button class="btn btn-sm btn-outline-info" onclick="runAction('status','${dev.ip}')">
+          <i class="bi bi-info-circle"></i> Status
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="runAction('monitor_ip','${dev.ip}')">
+          <i class="bi bi-eye"></i> Monitor
+        </button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function killTask(taskId) {
+  const resp = await fetch(`/api/task/${taskId}`, { method: 'DELETE' });
+  if (resp.ok) { toast('Task killed', 'info'); refreshStatus(); }
+  else toast('Failed to kill task', 'error');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Config editor
+═══════════════════════════════════════════════════════════════════════════ */
+async function loadConfig() {
+  const resp = await fetch('/api/config');
+  const data = await resp.json();
+  if (data.config !== undefined)
+    document.getElementById('config-editor').value = data.config;
+}
+
+async function saveConfig() {
+  const raw = document.getElementById('config-editor').value;
+  const resp = await fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ config: raw }),
+  });
+  const data = await resp.json();
+  if (resp.ok) { toast('Config saved', 'success'); refreshStatus(); }
+  else toast(`Save failed: ${data.error}`, 'error');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Logs
+═══════════════════════════════════════════════════════════════════════════ */
+async function loadLogs() {
+  const resp = await fetch('/api/logs?n=300');
+  const data = await resp.json();
+  const el   = document.getElementById('log-content');
+  el.innerHTML = (data.lines || []).map(line => {
+    const esc = line.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    if (/ERROR|CRITICAL/i.test(esc))   return `<span class="log-error">${esc}</span>`;
+    if (/WARNING|WARN/i.test(esc))     return `<span class="log-warn">${esc}</span>`;
+    if (/INFO/i.test(esc))             return `<span class="log-info">${esc}</span>`;
+    return esc;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function toggleAutoLog() {
+  const lbl = document.getElementById('auto-log-lbl');
+  if (autoLogTimer) {
+    clearInterval(autoLogTimer);
+    autoLogTimer = null;
+    lbl.textContent = 'Auto OFF';
+  } else {
+    autoLogTimer = setInterval(loadLogs, 3000);
+    lbl.textContent = 'Auto ON';
+    loadLogs();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   iptables viewer
+═══════════════════════════════════════════════════════════════════════════ */
+async function loadIptables() {
+  const resp = await fetch('/api/iptables');
+  const data = await resp.json();
+  document.getElementById('ipt-content').textContent = data.rules || data.error || '';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Toast notifications
+═══════════════════════════════════════════════════════════════════════════ */
+function toast(msg, type = 'info') {
+  const area = document.getElementById('toast-area');
+  const el   = document.createElement('div');
+  el.className = `toast-msg ${type}`;
+  el.textContent = msg;
+  area.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+</script>
+</body>
+</html>
