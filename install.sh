@@ -108,6 +108,28 @@ EOF
     echo "Start:   systemctl start  chromecast-blocker chromecast-ui"
 fi
 
+# Setup desktop autostart (shows terminal window at Pi login)
+chmod +x startup_protect.sh
+
+read -p "Install desktop autostart (terminal window on Pi login)? (y/n) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Detect the real user (the one who invoked sudo, not root itself)
+    REAL_USER="${SUDO_USER:-$USER}"
+    REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+    AUTOSTART_DIR="$REAL_HOME/.config/autostart"
+
+    mkdir -p "$AUTOSTART_DIR"
+
+    # Rewrite the .desktop Exec path to the actual install location
+    sed "s|/home/jorgen-larsen/block_chromecast|$(pwd)|g" \
+        chromecast-autostart.desktop > "$AUTOSTART_DIR/chromecast-autostart.desktop"
+
+    chown "$REAL_USER:$REAL_USER" "$AUTOSTART_DIR/chromecast-autostart.desktop"
+    echo "Autostart installed → $AUTOSTART_DIR/chromecast-autostart.desktop"
+    echo "The terminal window will open automatically at next desktop login."
+fi
+
 echo "=== Installation Complete ==="
 echo ""
 echo "Quick start (CLI):"

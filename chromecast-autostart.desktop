@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Chromecast Security Blocker
+Comment=Discover Chromecast, apply full protection, show live dashboard
+Exec=lxterminal --geometry=100x40 --title="Chromecast Security Blocker" -e "bash /home/jorgen-larsen/block_chromecast/startup_protect.sh; exec bash"
+Icon=network-wired
+Terminal=false
+Hidden=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
