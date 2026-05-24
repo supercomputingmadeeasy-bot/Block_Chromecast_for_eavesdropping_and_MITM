@@ -100,33 +100,63 @@ if [[ "$USE_NM" == "true" ]]; then
     nmcli con delete "${NM_CON}" > /dev/null
   fi
 
-  # Create the AP connection profile
-  nmcli con add \
-    type wifi \
-    ifname "${IFACE}" \
-    con-name "${NM_CON}" \
-    autoconnect yes \
-    ssid "${SSID}" \
-    mode ap \
-    -- \
-    ipv4.method shared \
-    ipv4.addresses "${AP_IP}/24" \
-    ipv6.method disabled \
-    802-11-wireless.band bg \
-    802-11-wireless.channel "${CHANNEL}" \
-    wifi-sec.key-mgmt wpa-psk \
-    wifi-sec.psk "${PASSPHRASE}" > /dev/null
+  # Write the NM keyfile directly.
+  # nmcli con add with psk-flags=0 does NOT reliably write the PSK into the
+  # system keyfile — NM may agent-manage it and lose it on reboot.
+  # Writing the .nmconnection file directly guarantees the PSK persists.
+  NM_KEYFILE="/etc/NetworkManager/system-connections/${NM_CON}.nmconnection"
+  mkdir -p /etc/NetworkManager/system-connections
 
-  success "Connection profile '${NM_CON}' created"
+  # Generate a stable UUID from the SSID so re-runs are idempotent
+  CONN_UUID=$(python3 -c "import uuid; print(uuid.uuid5(uuid.NAMESPACE_DNS, '${SSID}'))" 2>/dev/null \
+              || cat /proc/sys/kernel/random/uuid)
+
+  info "Writing NM keyfile: ${NM_KEYFILE}"
+  cat > "${NM_KEYFILE}" <<NMCON_EOF
+[connection]
+id=${NM_CON}
+uuid=${CONN_UUID}
+type=wifi
+autoconnect=true
+autoconnect-priority=100
+permissions=
+
+[wifi]
+band=bg
+channel=${CHANNEL}
+mode=ap
+ssid=${SSID}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${PASSPHRASE}
+psk-flags=0
+
+[ipv4]
+method=shared
+address1=${AP_IP}/24
+
+[ipv6]
+method=disabled
+addr-gen-mode=stable-privacy
+NMCON_EOF
+
+  # Keyfile must be root-only — NM refuses to load world-readable connection files
+  chmod 600 "${NM_KEYFILE}"
+  chown root:root "${NM_KEYFILE}"
+  success "Keyfile written (PSK stored on-disk, not agent-managed)"
+
+  # Reload NM connection list so it picks up the new file
+  nmcli con reload
+  sleep 1
 
   # Bring it up immediately
   info "Activating hotspot..."
   nmcli con up "${NM_CON}" || warn "Could not activate now (will come up on next boot)"
 
-  success "NetworkManager hotspot configured — will persist across reboots"
+  success "NetworkManager hotspot configured — PSK will persist across reboots"
 
-  # Persist DHCP range / channel settings via NM dispatcher (optional override)
-  # NM's built-in 'shared' mode already provides dnsmasq DHCP — no extra setup needed.
+  # NM's built-in 'shared' mode provides dnsmasq DHCP — no extra setup needed.
 
 else
   # ─────────────────────────────────────────────────────────────────────────
@@ -266,6 +296,57 @@ DNSMASQ_EOF
   success "hostapd and dnsmasq running"
 
 fi   # end legacy path
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Configure Pi user autologin so desktop autostart fires on every reboot
+step "Configuring user autologin"
+
+AUTOLOGIN_USER="${SUDO_USER:-}"
+# If SUDO_USER is empty (e.g. run as root directly) fall back to 'pi' or 'jorgen-larsen'
+if [[ -z "$AUTOLOGIN_USER" ]]; then
+  if id "jorgen-larsen" &>/dev/null; then
+    AUTOLOGIN_USER="jorgen-larsen"
+  elif id "pi" &>/dev/null; then
+    AUTOLOGIN_USER="pi"
+  else
+    AUTOLOGIN_USER=$(getent passwd 1000 | cut -d: -f1)
+  fi
+fi
+
+if [[ -n "$AUTOLOGIN_USER" ]]; then
+  # ── Desktop autologin (lightdm — used by Raspberry Pi OS) ─────────────
+  if command -v lightdm &>/dev/null || [[ -d /etc/lightdm ]]; then
+    mkdir -p /etc/lightdm/lightdm.conf.d
+    cat > /etc/lightdm/lightdm.conf.d/20-autologin.conf <<AUTOLOGIN_EOF
+[Seat:*]
+autologin-user=${AUTOLOGIN_USER}
+autologin-user-timeout=0
+AUTOLOGIN_EOF
+    success "lightdm autologin configured for '${AUTOLOGIN_USER}'"
+  fi
+
+  # ── Console autologin (getty — fallback / headless Pi) ────────────────
+  mkdir -p /etc/systemd/system/getty@tty1.service.d
+  cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf <<GETTY_EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ${AUTOLOGIN_USER} --noclear %I \$TERM
+GETTY_EOF
+  systemctl daemon-reload
+  success "Console autologin configured for '${AUTOLOGIN_USER}'"
+
+  # ── Install desktop autostart entry ───────────────────────────────────
+  SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+  AUTOSTART_DIR="/home/${AUTOLOGIN_USER}/.config/autostart"
+  mkdir -p "${AUTOSTART_DIR}"
+  cp "${SCRIPT_DIR}/chromecast-autostart.desktop" "${AUTOSTART_DIR}/chromecast-autostart.desktop"
+  chown -R "${AUTOLOGIN_USER}:${AUTOLOGIN_USER}" "/home/${AUTOLOGIN_USER}/.config"
+  success "Autostart entry installed → ${AUTOSTART_DIR}/chromecast-autostart.desktop"
+
+else
+  warn "Could not determine autologin user — skipping autologin setup"
+  warn "Run manually:  sudo raspi-config  → System Options → Boot/Auto Login"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Write a persistent config file so change_hotspot_password.sh knows the setup

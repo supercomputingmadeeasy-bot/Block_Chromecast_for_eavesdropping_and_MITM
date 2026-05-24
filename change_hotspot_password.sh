@@ -48,8 +48,29 @@ read -rp "Apply? [y/N] " ans
 # ── Apply change ──────────────────────────────────────────────────────────
 if [[ "${USE_NM}" == "true" ]]; then
   # ── NetworkManager ──────────────────────────────────────────────────────
-  info "Updating NetworkManager connection '${NM_CON}'..."
-  nmcli con modify "${NM_CON}" wifi-sec.psk "${NEW_PASS}"
+  # Edit the keyfile directly so the PSK is always stored on-disk (psk-flags=0),
+  # not managed by an NM agent which loses it on reboot.
+  NM_KEYFILE="/etc/NetworkManager/system-connections/${NM_CON}.nmconnection"
+
+  if [[ -f "${NM_KEYFILE}" ]]; then
+    info "Editing keyfile: ${NM_KEYFILE}"
+    sed -i "s|^psk=.*|psk=${NEW_PASS}|" "${NM_KEYFILE}"
+    # Ensure psk-flags=0 is set (stored on-disk, never agent-managed)
+    if grep -q "^psk-flags=" "${NM_KEYFILE}"; then
+      sed -i "s|^psk-flags=.*|psk-flags=0|" "${NM_KEYFILE}"
+    else
+      sed -i "/^psk=/a psk-flags=0" "${NM_KEYFILE}"
+    fi
+    chmod 600 "${NM_KEYFILE}"
+    nmcli con reload
+  else
+    warn "Keyfile not found at ${NM_KEYFILE} — falling back to nmcli con modify"
+    nmcli con modify "${NM_CON}" \
+      wifi-sec.psk "${NEW_PASS}" \
+      wifi-sec.psk-flags 0 \
+      connection.permissions ""
+  fi
+
   nmcli con down "${NM_CON}" 2>/dev/null || true
   sleep 1
   nmcli con up   "${NM_CON}"

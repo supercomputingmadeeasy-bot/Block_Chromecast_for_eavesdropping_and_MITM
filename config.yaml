@@ -18,7 +18,7 @@ blocking:
   isolate_local_only: true
 chromecast_devices:
 - enabled: true
-  ip: 10.42.0.87
+  ip: 10.42.0.73
   name: Living Room Chromecast
 chromecast_ports:
 - 5353

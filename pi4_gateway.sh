@@ -32,7 +32,7 @@ DHCP_RANGE_START="10.42.0.10"
 DHCP_RANGE_END="10.42.0.200"
 WIFI_AP=false           # Set true to use wlan0 as LAN AP instead of eth1
 BLOCKER_DIR="/opt/chromecast_blocker"
-BLOCKER_USER="pi"
+BLOCKER_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 UI_PORT=8080
 
 # ── Colour helpers ────────────────────────────────────────────────────────
@@ -48,6 +48,7 @@ step()    { echo -e "\n${BOLD}═══ $* ═══${NC}"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --wifi-ap)    WIFI_AP=true; LAN_IFACE="wlan0"; shift ;;
+    --nm-hotspot) WIFI_AP=true; LAN_IFACE="wlan0"; NM_MANAGED=true; shift ;;
     --lan-iface)  LAN_IFACE="$2"; shift 2 ;;
     --wan-iface)  WAN_IFACE="$2"; shift 2 ;;
     --subnet)     LAN_SUBNET="$2"; shift 2 ;;
@@ -58,6 +59,15 @@ while [[ $# -gt 0 ]]; do
     *) warn "Unknown arg: $1"; shift ;;
   esac
 done
+
+# ── Auto-detect NetworkManager-managed hotspot ────────────────────────────
+# If NM already owns wlan0 as a shared AP, skip hostapd + standalone dnsmasq
+if [[ "${WIFI_AP}" == "true" && "${NM_MANAGED:-false}" != "true" ]]; then
+  if nmcli -t -f DEVICE,TYPE,STATE dev status 2>/dev/null | grep -q "^wlan0:wifi:connected"; then
+    NM_MANAGED=true
+    info "Detected NetworkManager hotspot on wlan0 — skipping hostapd/dnsmasq setup"
+  fi
+fi
 
 # ── Root check ────────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && error "Run this script with sudo"
@@ -113,7 +123,7 @@ success "System updated"
 step "2. Install required packages"
 PACKAGES="python3 python3-pip python3-venv iptables iptables-persistent
           nmap avahi-utils avahi-daemon tcpdump arptables dnsmasq git curl"
-if [[ "$WIFI_AP" == "true" ]]; then
+if [[ "$WIFI_AP" == "true" && "${NM_MANAGED:-false}" != "true" ]]; then
   PACKAGES="$PACKAGES hostapd"
 fi
 # shellcheck disable=SC2086
@@ -123,8 +133,8 @@ success "Packages installed"
 # ═══════════════════════════════════════════════════════════════════════════
 step "3. Configure LAN interface (${LAN_IFACE})"
 
-if [[ "$WIFI_AP" == "true" ]]; then
-  # WiFi AP mode
+if [[ "$WIFI_AP" == "true" && "${NM_MANAGED:-false}" != "true" ]]; then
+  # WiFi AP mode — standalone hostapd (no NetworkManager)
   info "Configuring ${LAN_IFACE} as WiFi access point..."
 
   cat > /etc/hostapd/hostapd.conf <<EOF
@@ -146,6 +156,10 @@ country_code=US
 EOF
   sed -i 's|#DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
   warn "WiFi AP SSID=chromecast_blocked, password=12345678 — change with: sudo bash change_hotspot_password.sh <new_pass>"
+
+elif [[ "$WIFI_AP" == "true" && "${NM_MANAGED:-false}" == "true" ]]; then
+  # NetworkManager manages the AP — nothing to configure here
+  info "Skipping hostapd: NetworkManager controls ${LAN_IFACE}"
 
 else
   # Wired LAN interface — assign static IP
@@ -244,61 +258,96 @@ iptables -A FORWARD -i "${LAN_IFACE}" -o "${WAN_IFACE}" \
 success "Chromecast WAN-blocking base rules applied"
 
 # ═══════════════════════════════════════════════════════════════════════════
-step "7. Configure dnsmasq (DHCP + DNS for LAN)"
+step "7. Configure DNS (DHCP + Chromecast hostname blocking)"
 
-systemctl stop dnsmasq 2>/dev/null || true
-
-# Disable systemd-resolved stub listener so it doesn't occupy port 53
-if systemctl is-active --quiet systemd-resolved; then
-  mkdir -p /etc/systemd/resolved.conf.d
-  cat > /etc/systemd/resolved.conf.d/no-stub.conf <<EOF
-[Resolve]
-DNSStubListener=no
-EOF
-  systemctl restart systemd-resolved
-  # Point /etc/resolv.conf at the real resolved socket (not the stub)
-  ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
-fi
-
-# Ensure log file exists and is writable
-touch /var/log/dnsmasq.log
-chmod 644 /var/log/dnsmasq.log
-
-cat > /etc/dnsmasq.conf <<EOF
-# dnsmasq config — Pi 4 LAN gateway
-interface=${LAN_IFACE}
-bind-interfaces
-
-# DHCP range
-dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},24h
-dhcp-option=option:router,${LAN_GW_IP}
-dhcp-option=option:dns-server,${LAN_GW_IP}
-
-# Block Google DNS (force all DNS through Pi — enables DNS-level blocking)
+if [[ "${NM_MANAGED:-false}" == "true" ]]; then
+  # NetworkManager's internal dnsmasq handles DHCP — inject our block rules
+  # into its drop-in dir so it picks them up on next restart.
+  info "Injecting Chromecast DNS blocks into NetworkManager dnsmasq config..."
+  mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+  cat > /etc/NetworkManager/dnsmasq-shared.d/chromecast-blocks.conf <<EOF
+# Chromecast / Google telemetry DNS blocks
+# Managed by pi4_gateway.sh — do not edit manually
+# NOTE: Google ad domains (doubleclick.net, googlesyndication.com,
+# googleadservices.com, gstaticadssl.l.google.com) are intentionally NOT
+# blocked here so that Spotify Free works on non-Chromecast clients.
+# The Chromecast is still protected via iptables (gstatic.com string-match
+# on DNS from Chromecast IP) and AdGuard DNS redirect.
 address=/googleapis.com/#
 address=/clients.google.com/#
 address=/connectivitycheck.gstatic.com/#
 address=/clients3.google.com/#
 address=/www3.l.google.com/#
-
-# Block known Chromecast telemetry hostnames
 address=/eureka.gvt1.com/#
-address=/gstaticadssl.l.google.com/#
+address=/cast.google.com/#
+address=/chromecast.google.com/#
+# Upstream DNS (Quad9 — privacy-focused)
+server=9.9.9.9
+server=149.112.112.112
+EOF
+  # Tell NM to restart the shared connection so dnsmasq reloads
+  NM_CON=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
+            | grep ":${LAN_IFACE}$" | cut -d: -f1 | head -1)
+  if [[ -n "$NM_CON" ]]; then
+    nmcli con down "$NM_CON" && nmcli con up "$NM_CON" \
+      && success "NetworkManager hotspot restarted with Chromecast DNS blocks" \
+      || warn "Could not restart NM connection '${NM_CON}' — reboot to apply DNS blocks"
+  else
+    warn "No active NM connection found on ${LAN_IFACE} — reboot to apply DNS blocks"
+  fi
+else
+  # Standalone dnsmasq
+  systemctl stop dnsmasq 2>/dev/null || true
+
+  # Disable systemd-resolved stub listener so it doesn't occupy port 53
+  if systemctl is-active --quiet systemd-resolved; then
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat > /etc/systemd/resolved.conf.d/no-stub.conf <<EOF
+[Resolve]
+DNSStubListener=no
+EOF
+    systemctl restart systemd-resolved
+    ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+  fi
+
+  touch /var/log/dnsmasq.log
+  chmod 644 /var/log/dnsmasq.log
+
+  cat > /etc/dnsmasq.conf <<EOF
+# dnsmasq config — Pi 4 LAN gateway
+interface=${LAN_IFACE}
+bind-interfaces
+
+dhcp-range=${DHCP_RANGE_START},${DHCP_RANGE_END},24h
+dhcp-option=option:router,${LAN_GW_IP}
+dhcp-option=option:dns-server,${LAN_GW_IP}
+
+# Block Google DNS / Chromecast telemetry
+# NOTE: Google ad domains (doubleclick.net, googlesyndication.com,
+# googleadservices.com, gstaticadssl.l.google.com) are intentionally NOT
+# blocked here so that Spotify Free works on non-Chromecast clients.
+# The Chromecast is still protected via iptables (gstatic.com string-match
+# on DNS from Chromecast IP) and AdGuard DNS redirect.
+address=/googleapis.com/#
+address=/clients.google.com/#
+address=/connectivitycheck.gstatic.com/#
+address=/clients3.google.com/#
+address=/www3.l.google.com/#
+address=/eureka.gvt1.com/#
 address=/cast.google.com/#
 address=/chromecast.google.com/#
 
-# Upstream DNS (use Pi-hole or a privacy-respecting resolver instead of Google)
-server=9.9.9.9        # Quad9 (privacy-focused)
-server=149.112.112.112 # Quad9 secondary
+server=9.9.9.9
+server=149.112.112.112
 
-# Log DNS queries (useful for debugging)
 log-queries
 log-facility=/var/log/dnsmasq.log
 EOF
 
-systemctl enable dnsmasq
-systemctl start  dnsmasq || { echo "[ERROR] dnsmasq failed to start — check: journalctl -xeu dnsmasq.service"; journalctl -xeu dnsmasq.service --no-pager | tail -30; exit 1; }
-success "dnsmasq configured and started"
+  systemctl enable dnsmasq
+  systemctl start  dnsmasq || { echo "[ERROR] dnsmasq failed to start — check: journalctl -xeu dnsmasq.service"; journalctl -xeu dnsmasq.service --no-pager | tail -30; exit 1; }
+  success "dnsmasq configured and started"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 step "8. Save iptables rules (persistent across reboots)"
@@ -399,7 +448,7 @@ if [[ "$WIFI_AP" == "true" ]]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-step "12. Sudoers — allow blocker to run iptables without password"
+step "12. Sudoers — allow blocker to run iptables and python without password"
 
 SUDOERS_FILE="/etc/sudoers.d/chromecast-blocker"
 cat > "${SUDOERS_FILE}" <<EOF
@@ -408,9 +457,44 @@ root ALL=(ALL) NOPASSWD: /sbin/iptables, /sbin/iptables-save, /sbin/iptables-res
 root ALL=(ALL) NOPASSWD: /sbin/arptables, /usr/sbin/nmap
 ${BLOCKER_USER} ALL=(ALL) NOPASSWD: /sbin/iptables, /sbin/iptables-save, /sbin/iptables-restore
 ${BLOCKER_USER} ALL=(ALL) NOPASSWD: /sbin/arptables, /usr/sbin/nmap
+# Allow running the blocker python scripts without a password prompt
+# (required by startup_protect.sh which calls: sudo python3 <script>.py ...)
+${BLOCKER_USER} ALL=(ALL) NOPASSWD: /usr/bin/python3
+${BLOCKER_USER} ALL=(ALL) NOPASSWD: ${BLOCKER_DIR}/venv/bin/python3
 EOF
 chmod 440 "${SUDOERS_FILE}"
 success "Sudoers configured"
+
+# ═══════════════════════════════════════════════════════════════════════════
+step "13. Configure auto-login (no password needed at boot)"
+
+# ── Console / headless auto-login (getty on tty1) ────────────────────────
+GETTY_OVERRIDE="/etc/systemd/system/getty@tty1.service.d"
+mkdir -p "${GETTY_OVERRIDE}"
+cat > "${GETTY_OVERRIDE}/autologin.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ${BLOCKER_USER} --noclear %I \$TERM
+EOF
+
+# ── Desktop / LightDM auto-login (Raspberry Pi OS desktop) ──────────────
+if command -v lightdm &>/dev/null || [[ -f /etc/lightdm/lightdm.conf ]]; then
+  mkdir -p /etc/lightdm/lightdm.conf.d
+  cat > /etc/lightdm/lightdm.conf.d/50-autologin.conf <<EOF
+[Seat:*]
+autologin-user=${BLOCKER_USER}
+autologin-user-timeout=0
+EOF
+  success "LightDM auto-login enabled for '${BLOCKER_USER}'"
+fi
+
+# ── Ensure user is in autologin group if it exists ───────────────────────
+if getent group autologin &>/dev/null; then
+  usermod -aG autologin "${BLOCKER_USER}"
+fi
+
+systemctl daemon-reload
+success "Auto-login configured — '${BLOCKER_USER}' will log in automatically on boot"
 
 # ═══════════════════════════════════════════════════════════════════════════
 PI_IP=$(ip -4 addr show "${LAN_IFACE}" 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+' | head -1)

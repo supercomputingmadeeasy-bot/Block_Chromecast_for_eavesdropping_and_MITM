@@ -36,7 +36,15 @@ divider() { echo "   ───────────────────�
 clear
 banner "CHROMECAST SECURITY BLOCKER — STARTUP"
 
-step "Waiting for wlan0 hotspot ($HOTSPOT_GW)..."
+step "Ensuring wlan0 hotspot is active ($HOTSPOT_GW)..."
+
+# Actively bring up the hotspot if not already running
+if ! ip addr show wlan0 2>/dev/null | grep -q "10\.42\.0\."; then
+    ok "Hotspot not yet up — starting chromecast-hotspot via NetworkManager..."
+    sudo nmcli con up chromecast-hotspot 2>/dev/null \
+        && ok "nmcli: chromecast-hotspot activated" \
+        || fail "nmcli: could not start hotspot (will keep waiting)"
+fi
 
 MAX_WAIT=60
 WAITED=0
@@ -59,7 +67,7 @@ step "Scanning $SCAN_RANGE for Chromecast devices..."
 divider
 
 cd "$WORK_DIR" || exit 1
-DISCOVERED=$(sudo "$PYTHON" chromecast_blocker.py discover \
+DISCOVERED=$(sudo "$PYTHON" "$WORK_DIR/chromecast_blocker.py" discover \
     --scan-range "$SCAN_RANGE" \
     --scan-timeout 45 2>/dev/null)
 
@@ -96,18 +104,18 @@ divider
 if [[ -n "$CC_IP_DISCOVERED" ]]; then
     step "Applying full protection to discovered Chromecast ($CC_IP_DISCOVERED)..."
     divider
-    sudo "$PYTHON" chromecast_blocker.py full-protect --ip "$CC_IP_DISCOVERED"
+    sudo "$PYTHON" "$WORK_DIR/chromecast_blocker.py" full-protect --ip "$CC_IP_DISCOVERED"
 else
     step "Applying full protection from config.yaml..."
     divider
-    sudo "$PYTHON" advanced_blocker.py --config "$CONFIG" protect-all
+    sudo "$PYTHON" "$WORK_DIR/advanced_blocker.py" --config "$CONFIG" protect-all
 fi
 divider
 
 # ── Step 4: Show protection summary ──────────────────────────────
 step "Protection summary:"
 divider
-sudo "$PYTHON" advanced_blocker.py --config "$CONFIG" summary
+sudo "$PYTHON" "$WORK_DIR/advanced_blocker.py" --config "$CONFIG" summary
 divider
 
 echo ""
@@ -127,4 +135,4 @@ if [[ -z "$CC_IP_DISCOVERED" ]]; then
     CC_IP_DISCOVERED=$("$PYTHON" -c "import yaml; c=yaml.safe_load(open('$CONFIG')); print(c['chromecast_devices'][0]['ip'])" 2>/dev/null || echo "10.42.0.88")
 fi
 
-exec sudo "$PYTHON" status_monitor.py "$CC_IP_DISCOVERED"
+exec sudo "$PYTHON" "$WORK_DIR/status_monitor.py" "$CC_IP_DISCOVERED"
