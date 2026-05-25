@@ -1,9 +1,15 @@
-# Chromecast Security Blocker
+# Chromecast Security Blocker — AI-Powered Gateway Defence
 
-Stop Chromecast from sending **eavesdropping, telemetry and spy information** over the WAN.  
+Stop Chromecast from sending **eavesdropping, telemetry and spy information** over the WAN —
+guarded by a **four-layer defence system** where an AI threat-correlation engine works
+side-by-side with a real-time security watchdog.
+
 The recommended deployment runs on a **Raspberry Pi 4** inserted between your WAN router and
-all local devices — every outbound packet from the Chromecast is inspected and blocked before
-it reaches the internet.
+all local devices.  Every outbound packet is inspected and blocked before it reaches the internet.
+Meanwhile the **AI Analyser** reads the compiled security log every 30 seconds, scores every
+attack event, detects coordinated multi-vector intrusions, and — when the threat reaches a
+critical level — can optionally consult a **local LLM (phi3:mini via ollama)** before deciding
+whether to trigger an emergency internet lockdown.
 
 A **browser-based Web UI** provides full control with a live terminal window, real-time status,
 config editor, log viewer, and iptables inspector.  Everything can be operated from both the UI
@@ -11,19 +17,34 @@ and the command line simultaneously (parallel execution).
 
 ---
 
-## Architecture
+## Architecture — Four Layers of Defence
 
 ```
 Internet ──► WAN Router ──► [ Pi 4 eth0 ]
                              [ Pi 4 eth1 ] ──► LAN Switch ──► Chromecast (blocked)
                                                            └──► Other devices (normal)
+
+  Layer 1 (instant)   — iptables static DROP rules (ports, domains, WAN sources)
+  Layer 2 (real-time) — pi_watchdog.py: ARP monitor, kernel-log scanner, SSH brute-force
+                        detector — blocks offending IPs within milliseconds of threshold
+  Layer 3 (30 s)      — AIAnalyser: scores every new log event, detects coordinated
+                        multi-vector attacks, consults LLM if available, escalates to
+                        emergency shutdown on FATAL threat level
+  Layer 4 (hardware)  — BCM2711 hardware watchdog (/dev/watchdog): hard-reboots the Pi
+                        if the software process ever hangs
 ```
 
-See **[PI4_SETUP.md](PI4_SETUP.md)** for the complete Raspberry Pi 4 deployment guide.
+See **[PI4_SETUP.md](PI4_SETUP.md)** for the complete Raspberry Pi 4 deployment guide.  
+See **[AI_WATCHDOG_COOPERATION.md](AI_WATCHDOG_COOPERATION.md)** for the full AI + watchdog internals with diagrams.
 
 ---
 
-Protect against unauthorized access, eavesdropping, and network attacks via Chromecast devices. This tool blocks external access, prevents cloud connectivity for eavesdropping, protects against DDoS amplification, defends against MITM attacks, and isolates your Chromecast to local network only.
+Protect against unauthorized access, eavesdropping, and network attacks via Chromecast devices.
+This tool blocks external access, prevents cloud connectivity for eavesdropping, protects against
+DDoS amplification, defends against MITM attacks, and isolates your Chromecast to local network only.
+All of this is continuously overseen by an **AI threat-scoring engine** that correlates events
+across all attack types and can autonomously lock down the internet connection if the combined
+threat level becomes critical.
 
 ## Security Threats
 
@@ -55,19 +76,36 @@ Protect against unauthorized access, eavesdropping, and network attacks via Chro
 
 ## Features
 
+### Firewall & Blocking
 ✅ Block external/WAN access to Chromecast  
 ✅ Block cloud connectivity and eavesdropping  
 ✅ Prevent DDoS amplification attacks  
 ✅ Defend against MITM attacks  
 ✅ Network isolation (local-only mode)  
+✅ **DNS-level blocking** via dnsmasq (Chromecast can't bypass iptables with hardcoded DNS)  
+
+### AI-Powered Watchdog (`pi_watchdog.py`)
+✅ **AI Analyser** — reads the security log every 30 s and scores every attack event  
+✅ **Threat level escalation** — NORMAL → SUSPICIOUS → CRITICAL → FATAL  
+✅ **Coordination detection** — bonus score when the same IP uses 3+ attack types at once  
+✅ **Optional local LLM** (phi3:mini via ollama) — can upgrade but never downgrade the AI score  
+✅ **Emergency internet lockdown** — FORWARD=DROP + NAT flush + WAN interface down on FATAL  
+✅ **ARP spoof / cable MITM detection** — MAC change alerts in real time  
+✅ **SSH brute-force detection** — blocks after 4 failures in 120 s  
+✅ **Port scan & flood detection** — NULL / XMAS / FIN / SYN scans, SYN / ICMP / UDP floods  
+✅ **Hardware watchdog** — Pi hard-reboots automatically if the process ever hangs  
+✅ **Auto-expiring IP blocks** — 24 h TTL, persisted across restarts  
+✅ **Intrusion timeline viewer** (`trace_intruder.py`) — reconstruct any attack from the log  
+
+### Monitoring & UI
 ✅ Real-time traffic monitoring  
-✅ Suspicious activity logging  
+✅ Suspicious activity logging to `watchdog.log` + `intrusions.log` + `ai_alerts.json`  
 ✅ Easy discovery of Chromecast devices  
 ✅ Per-device configuration  
 ✅ **Web UI with live terminal output** (xterm.js + WebSocket)  
+✅ **AI alert panel** — browser polls `ai_alerts.json` every 5 s  
 ✅ **Parallel task execution** — run multiple operations simultaneously  
 ✅ **Raspberry Pi 4 gateway** — blocks at the network level, not just per-host  
-✅ **DNS-level blocking** via dnsmasq (Chromecast can't bypass iptables with hardcoded DNS)  
 ✅ **Systemd services** — auto-start on boot, log rotation, restart on failure  
 
 ## Quick Start
@@ -209,30 +247,42 @@ Kill any running task from the sidebar (✕ button) or from the shell (`kill <pi
 
 ## How It Works
 
-### External Access Blocking
+### Layer 1 — Static Firewall Rules (instant)
 - Uses iptables to DROP packets from WAN to Chromecast
-- Only allows traffic from private IP ranges (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+- Only allows traffic from private IP ranges (192.168.x.x, 10.x.x.x, 172.16–31.x.x)
+- Blocks DNS queries to Google domains; rate-limits cloud HTTP/HTTPS
+- Rate-limits mDNS (5353), SSDP (1900), DNS (53), NTP (123)
+- Drops ARP-spoofed, invalid, and malformed packets
 
-### Eavesdropping Prevention
-- Blocks DNS queries to Google domains
-- Rate-limits HTTPS/HTTP to cloud services
-- Prevents telemetry data transmission
+### Layer 2 — Real-Time Rule-Based Watchdog (milliseconds)
+- **KernelLogMonitor** streams `journalctl -k`, parses every iptables LOG line, and blocks
+  an IP the moment it crosses the scan (2 events/60 s) or flood (5 events/60 s) threshold
+- **AuthLogMonitor** streams the SSH journal and blocks after 4 failures in 120 s
+- **ARPMonitor** polls `/proc/net/arp` every 5 s and alerts on any MAC address change
+  (classic sign of a cable MITM / ARP poisoning attack)
+- All blocked IPs are persisted to `blocklist.json` and expire automatically after 24 h
 
-### DDoS Amplification Prevention
-- Rate-limits mDNS (port 5353)
-- Blocks SSDP (port 1900)
-- Rate-limits DNS (port 53)
-- Rate-limits NTP (port 123)
+### Layer 3 — AI Threat Correlation Engine (every 30 seconds)
+- Reads the last 200 lines of `watchdog.log` on each cycle
+- Maps every event type to a numeric threat score (`THREAT_SCORE_MAP`)
+- Awards a **coordination bonus (+3)** when the same source IP appears in 3 or more distinct
+  attack categories simultaneously — this catches sophisticated attackers who combine scans,
+  floods, and SSH probing in the same session
+- Derives an overall threat level: **NORMAL (0–2) / SUSPICIOUS (3–5) / CRITICAL (6–9) / FATAL (≥10)**
+- When `--llm-endpoint` is set and the score reaches SUSPICIOUS or above, the last 20 events
+  are sent to a **local LLM (phi3:mini via ollama)** which can upgrade — but never downgrade —
+  the threat classification
+- **SUSPICIOUS / CRITICAL** → alert via `wall` broadcast + `ai_alerts.json` (Web UI)
+- **FATAL** → same alerts + `EmergencyShutdown`: FORWARD=DROP, NAT flushed, WAN interface down
 
-### MITM Protection
-- Blocks ARP spoofing
-- Drops invalid/malformed packets
-- Validates packet states
+### Layer 4 — Hardware Watchdog (/dev/watchdog)
+- Arms the BCM2711 built-in watchdog timer at startup (15 s hardware timeout)
+- Sends a keep-alive every 10 s; also calls `sd_notify(WATCHDOG=1)` for systemd
+- If the Python process **hangs** for any reason, the hardware timer fires and the Pi
+  **hard-reboots automatically** — no human intervention needed
+- On clean shutdown, writes the magic `'V'` character to disarm the WDT (no spurious reboot)
 
-### Network Isolation
-- Restricts Chromecast communication to local networks only
-- Blocks all WAN traffic from device
-- Prevents device from accessing external services
+> Full diagrams and sequence flows: **[AI_WATCHDOG_COOPERATION.md](AI_WATCHDOG_COOPERATION.md)**
 
 ## Verification
 
