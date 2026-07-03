@@ -187,6 +187,51 @@ sysctl -w net.ipv4.ip_forward=1 > /dev/null
 success "IP forwarding enabled"
 
 # ═══════════════════════════════════════════════════════════════════════════
+step "4b. Tune kernel for streaming throughput"
+# Streaming (DR.dk, TV2, Spotify) creates many concurrent TCP connections.
+# Default conntrack table on a Pi is 8192 entries — easily exhausted, causing
+# silent packet drops that appear as "connection lost" or app freezes.
+
+SYSCTL_STREAMING=(
+  # Conntrack table — allow up to 65536 simultaneous tracked connections
+  "net.netfilter.nf_conntrack_max=65536"
+  # TCP time-wait bucket — recycle sooner to free table slots
+  "net.ipv4.tcp_max_tw_buckets=16384"
+  # Reduce time a CLOSE_WAIT / FIN_WAIT connection occupies conntrack
+  "net.netfilter.nf_conntrack_tcp_timeout_close_wait=10"
+  "net.netfilter.nf_conntrack_tcp_timeout_fin_wait=10"
+  "net.netfilter.nf_conntrack_tcp_timeout_time_wait=10"
+  # Keep ESTABLISHED connections tracked longer (streaming sessions can be idle briefly)
+  "net.netfilter.nf_conntrack_tcp_timeout_established=1800"
+  # UDP conntrack (DNS replies): keep short so table stays clean
+  "net.netfilter.nf_conntrack_udp_timeout=10"
+  "net.netfilter.nf_conntrack_udp_timeout_stream=30"
+  # Increase socket receive/send buffers for better throughput on 1080p/4K
+  "net.core.rmem_max=16777216"
+  "net.core.wmem_max=16777216"
+  "net.ipv4.tcp_rmem=4096 87380 16777216"
+  "net.ipv4.tcp_wmem=4096 65536 16777216"
+)
+
+for param in "${SYSCTL_STREAMING[@]}"; do
+  key="${param%%=*}"
+  val="${param##*=}"
+  # Apply immediately (ignore errors — some params need nf_conntrack loaded first)
+  sysctl -w "${key}=${val}" > /dev/null 2>&1 || true
+  # Persist across reboots
+  grep -q "^${key}" /etc/sysctl.conf \
+    && sed -i "s|^${key}.*|${key}=${val}|" /etc/sysctl.conf \
+    || echo "${key}=${val}" >> /etc/sysctl.conf
+done
+
+# hashsize should be half of nf_conntrack_max for good performance
+if [[ -f /sys/module/nf_conntrack/parameters/hashsize ]]; then
+  echo 32768 > /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null || true
+fi
+
+success "Kernel streaming tuning applied"
+
+# ═══════════════════════════════════════════════════════════════════════════
 step "5. Configure NAT (masquerading) and base firewall rules"
 
 # Flush existing rules first

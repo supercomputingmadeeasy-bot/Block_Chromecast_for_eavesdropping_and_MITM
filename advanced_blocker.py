@@ -56,38 +56,64 @@ class AdvancedChromecastBlocker(ChromecastBlocker):
     def protect_all_devices(self):
         """Apply protections to all configured devices"""
         devices = self.config.get('chromecast_devices', [])
-        
+
         if not devices:
             logger.warning("No devices configured in config.yaml")
             return
-        
+
+        # Apply DNS rate-limit overrides from config before protecting devices.
+        dns_cfg = self.config.get('dns_rate_limits', {})
+        if dns_cfg:
+            import chromecast_blocker as _cb_mod
+            # Patch class-level defaults so block_ddos_amplification() picks them up
+            self._dns_udp_limit   = dns_cfg.get('udp_limit_per_min', 300)
+            self._dns_udp_burst   = dns_cfg.get('udp_burst', 60)
+            self._dns_tcp_limit   = dns_cfg.get('tcp_limit_per_min', 60)
+            self._dns_tcp_burst   = dns_cfg.get('tcp_burst', 20)
+            self._mdns_limit      = dns_cfg.get('mdns_limit_per_min', 5)
+            self._mdns_burst      = dns_cfg.get('mdns_burst', 15)
+            logger.info(
+                f"DNS rate limits from config: UDP {self._dns_udp_limit}/min burst {self._dns_udp_burst}, "
+                f"TCP {self._dns_tcp_limit}/min burst {self._dns_tcp_burst}"
+            )
+
         for device in devices:
             if not device.get('enabled', True):
                 logger.info(f"Skipping disabled device: {device.get('name')}")
                 continue
-            
+
             ip = device.get('ip')
             name = device.get('name', ip)
-            
+
             logger.info(f"Protecting {name} at {ip}")
             self.chromecast_ip = ip
-            
+
             blocking_config = self.config.get('blocking', {})
-            
+
             if blocking_config.get('block_external', True):
                 self.block_external_access(ip)
-            
+
             if blocking_config.get('block_eavesdropping', True):
                 self.block_eavesdropping(ip)
-            
+
             if blocking_config.get('block_ddos_amplification', True):
                 self.block_ddos_amplification(ip)
-            
+
             if blocking_config.get('block_mitm', True):
                 self.block_mitm_attacks(ip)
-            
+
             if blocking_config.get('isolate_local_only', True):
                 self.isolate_chromecast(ip)
+
+            # Allow Cast SDK / infrastructure domains so that Cast receiver apps
+            # (TV2 Play DK, etc.) can load and authenticate even when broad Google
+            # IP subnet drops are in place.  Rules are inserted at FORWARD position
+            # 1 and are idempotent (skipped if already present).
+            cast_cfg = self.config.get('cast_sdk_allowlist', {})
+            if cast_cfg.get('enabled', False):
+                domains = cast_cfg.get('domains', [])
+                if domains:
+                    self.allow_cast_domains(ip, domains)
     
     def continuous_monitor(self, interval: int = 60):
         """

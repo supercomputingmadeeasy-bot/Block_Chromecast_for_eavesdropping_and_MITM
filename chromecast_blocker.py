@@ -299,32 +299,51 @@ class ChromecastBlocker:
             True if successful, False otherwise
         """
         logger.info(f"Blocking DDoS amplification vectors from {chromecast_ip}")
-        
+
+        # Rate limits can be overridden by AdvancedChromecastBlocker via config.yaml
+        dns_udp_limit  = getattr(self, '_dns_udp_limit',  300)
+        dns_udp_burst  = getattr(self, '_dns_udp_burst',  60)
+        dns_tcp_limit  = getattr(self, '_dns_tcp_limit',  60)
+        dns_tcp_burst  = getattr(self, '_dns_tcp_burst',  20)
+        mdns_limit     = getattr(self, '_mdns_limit',     5)
+        mdns_burst     = getattr(self, '_mdns_burst',     15)
+
         # Use FORWARD chain with -i (inbound from Chromecast on the hotspot
         # interface).  The original OUTPUT chain with -s {chromecast_ip} never
         # matched — OUTPUT packets are sourced by the Pi, not by the Chromecast.
         rules = [
-            # Rate-limit mDNS amplification (port 5353)
+            # Rate-limit mDNS amplification (port 5353).
+            # Burst of 15 allows device discovery on startup without dropping.
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
-            f"-p udp --dport 5353 -m limit --limit 5/m -j ACCEPT",
+            f"-p udp --dport 5353 -m limit --limit {mdns_limit}/m --limit-burst {mdns_burst} -j ACCEPT",
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
             f"-p udp --dport 5353 -j DROP",
-            
+
             # Block SSDP amplification (port 1900)
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
             f"-p udp --dport 1900 -j DROP",
-            
-            # Rate-limit NTP amplification-like patterns
+
+            # Rate-limit NTP.  NTP syncs every few minutes at most; burst 3
+            # covers the rare rapid-retry on boot.
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
-            f"-p udp --dport 123 -m limit --limit 5/m -j ACCEPT",
+            f"-p udp --dport 123 -m limit --limit 1/m --limit-burst 3 -j ACCEPT",
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
             f"-p udp --dport 123 -j DROP",
-            
-            # Rate-limit DNS queries to prevent DNS amplification
+
+            # Rate-limit DNS to prevent amplification while allowing streaming.
+            # Streaming services (DR.dk, TV2, Spotify) use Akamai/CDN hostnames
+            # with short TTLs and can easily need 5–10 lookups/second during
+            # playback.  300/min (5/s) steady-state with a burst of 60 covers
+            # normal streaming without enabling meaningful DNS amplification.
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
-            f"-p udp --dport 53 -m limit --limit 20/m -j ACCEPT",
+            f"-p udp --dport 53 -m limit --limit {dns_udp_limit}/m --limit-burst {dns_udp_burst} -j ACCEPT",
             f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
             f"-p udp --dport 53 -j DROP",
+            # Also rate-limit TCP DNS (large responses / DoT fallback)
+            f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
+            f"-p tcp --dport 53 -m limit --limit {dns_tcp_limit}/m --limit-burst {dns_tcp_burst} -j ACCEPT",
+            f"iptables -A FORWARD -i {self.interface} -s {chromecast_ip} "
+            f"-p tcp --dport 53 -j DROP",
         ]
         
         return self._apply_firewall_rules(rules)
@@ -461,7 +480,51 @@ class ChromecastBlocker:
             logger.error(f"Error monitoring traffic: {e}")
         
         return stats
-    
+
+    def allow_cast_domains(self, chromecast_ip: str, domains: List[str]) -> bool:
+        """
+        Insert high-priority ACCEPT rules for Cast SDK domains so that streaming
+        apps (TV2 Play DK, etc.) can reach Cast infrastructure even when broad
+        Google IP subnet drops are in place.
+
+        Rules are scoped to the specific Chromecast IP and inserted at position 1
+        of the FORWARD chain (before all DROP rules).  Uses iptables -C to skip
+        insertion when a rule is already present, making this method idempotent.
+        """
+        prefix = '' if os.geteuid() == 0 else 'sudo '
+        for domain in domains:
+            try:
+                resolved = socket.getaddrinfo(domain, 443, socket.AF_INET, socket.SOCK_STREAM)
+                ips = list(set(r[4][0] for r in resolved))
+            except socket.gaierror as e:
+                logger.warning(f"Cast allowlist: could not resolve {domain}: {e}")
+                continue
+
+            for ip in ips:
+                rule_args = (
+                    f"-i {self.interface} -s {chromecast_ip} "
+                    f"-d {ip} -p tcp --dport 443 -j ACCEPT"
+                )
+                check = subprocess.run(
+                    f"{prefix}iptables -C FORWARD {rule_args}",
+                    shell=True, capture_output=True
+                )
+                if check.returncode != 0:
+                    ins = subprocess.run(
+                        f"{prefix}iptables -I FORWARD 1 {rule_args}",
+                        shell=True, capture_output=True
+                    )
+                    if ins.returncode == 0:
+                        logger.info(f"Cast allowlist: {domain} ({ip}) ACCEPT inserted")
+                    else:
+                        logger.warning(
+                            f"Cast allowlist: failed for {domain} ({ip}): "
+                            f"{ins.stderr.decode().strip()}"
+                        )
+                else:
+                    logger.debug(f"Cast allowlist: {domain} ({ip}) rule already present")
+        return True
+
     def _apply_firewall_rules(self, rules: List[str]) -> bool:
         """
         Apply firewall rules using iptables.

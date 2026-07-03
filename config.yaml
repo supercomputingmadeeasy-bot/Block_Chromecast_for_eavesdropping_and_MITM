@@ -16,6 +16,14 @@ blocking:
   block_external: true
   block_mitm: true
   isolate_local_only: true
+cast_sdk_allowlist:
+  domains:
+  - cast.googleapis.com
+  - www.googleapis.com
+  - oauth2.googleapis.com
+  - www.gstatic.com
+  - cast.google.com
+  enabled: true
 chromecast_devices:
 - enabled: true
   ip: 10.42.0.73
@@ -24,6 +32,13 @@ chromecast_ports:
 - 5353
 - 8008
 - 8009
+dns_rate_limits:
+  mdns_burst: 15
+  mdns_limit_per_min: 5
+  tcp_burst: 20
+  tcp_limit_per_min: 60
+  udp_burst: 60
+  udp_limit_per_min: 300
 local_networks:
 - 192.168.0.0/16
 - 10.0.0.0/8
